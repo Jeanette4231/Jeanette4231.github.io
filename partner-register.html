@@ -3,8 +3,106 @@
 <head><meta charset="utf-8"><title>Tesla partner registration</title></head>
 <body>
   <h1>Tesla partner registration</h1>
-  <p>Domain: jeanette4231.github.io</p>
-  <label for="client_secret">Tesla client secret</label>label><br>
+  <p>Domain: jeanette4231.github.io · Region: na</p>
+  <label for="client_secret">Tesla client secret</label><br>
   <input id="client_secret" name="client_secret" type="password" autocomplete="off">
+  <p><button type="button" id="register_btn">Register partner account</button></p>
+  <pre id="status">Enter the client secret, then click Register partner account.</pre>
+  <script>
+  (function () {
+    function redact(text) {
+      return String(text || '')
+        .replace(/"(access_token|refresh_token|id_token|client_secret)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+        .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [redacted]');
+    }
+    function setStatus(lines) {
+      document.getElementById('status').textContent = lines.join('\n');
+    }
+    document.getElementById('register_btn').addEventListener('click', async function () {
+      var secret = document.getElementById('client_secret').value;
+      var tokenHttp = 'not attempted';
+      var registerHttp = 'not attempted';
+      var publicKeyHttp = 'not attempted';
+      var registerResult = 'not attempted';
+      var teslaError = 'none';
+      var pemReturned = 'no';
+      if (!secret) {
+        setStatus(['missing_secret']);
+        return;
+      }
+      setStatus(['starting']);
+      try {
+        var tokenRes = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: '96ad86d4-4afe-4af0-b233-80c355e3142f',
+            client_secret: secret,
+            scope: 'openid vehicle_device_data vehicle_cmds',
+            audience: 'https://fleet-api.prd.na.vn.cloud.tesla.com'
+          })
+        });
+        tokenHttp = String(tokenRes.status);
+        var tokenText = await tokenRes.text();
+        var tokenJson = {};
+        try { tokenJson = JSON.parse(tokenText); } catch (e) {}
+        if (!tokenRes.ok || !tokenJson.access_token) {
+          setStatus([
+            'token_http_status: ' + tokenHttp,
+            'register_http_status: ' + registerHttp,
+            'Register: failed',
+            'public_key_http_status: ' + publicKeyHttp,
+            'Tesla error: ' + redact(tokenText).slice(0, 300)
+          ]);
+          return;
+        }
+        var token = tokenJson.access_token;
+        var registerRes = await fetch('https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ domain: 'jeanette4231.github.io' })
+        });
+        registerHttp = String(registerRes.status);
+        var registerText = await registerRes.text();
+        if (registerRes.ok) {
+          registerResult = 'success';
+        } else if (/already/i.test(registerText)) {
+          registerResult = 'already registered';
+        } else {
+          registerResult = 'failed';
+          teslaError = redact(registerText).slice(0, 300);
+        }
+        var pkRes = await fetch('https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts/public_key?domain=jeanette4231.github.io', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        publicKeyHttp = String(pkRes.status);
+        var pkText = await pkRes.text();
+        pemReturned = /BEGIN PUBLIC KEY|public_key/i.test(pkText) ? 'yes' : 'no';
+        setStatus([
+          'token_http_status: ' + tokenHttp,
+          'register_http_status: ' + registerHttp,
+          'Register: ' + registerResult,
+          'public_key_http_status: ' + publicKeyHttp,
+          'PEM returned: ' + pemReturned,
+          'Tesla error: ' + teslaError,
+          'Domain: jeanette4231.github.io',
+          'Region: na'
+        ]);
+      } catch (e) {
+        setStatus([
+          'token_http_status: ' + tokenHttp,
+          'register_http_status: ' + registerHttp,
+          'Register: failed',
+          'public_key_http_status: ' + publicKeyHttp,
+          'Tesla error: ' + redact(e && e.message ? e.message : String(e))
+        ]);
+      }
+    });
+  })();
+  </script>
 </body>
-</html></p></h1></body></title></head></html>
+</html>
