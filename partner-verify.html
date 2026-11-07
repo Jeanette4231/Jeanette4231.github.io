@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Tesla partner verify</title></head>
+<body>
+<!-- v2-partner-verify-eu -->
+  <h1>Tesla partner verify</h1>
+  <p>This temporary page obtains a Europe-region partner token so registration can be completed. It does not display secrets.</p>
+  <label for="client_secret">Tesla client secret</label><br>
+  <input id="client_secret" name="client_secret" type="password" autocomplete="off">
+  <p><button type="button" id="go">Check registration</button></p>
+  <pre id="status"></pre>
+  <script>
+  (function () {
+    function redact(text) {
+      return String(text || '')
+        .replace(/"(access_token|refresh_token|id_token|client_secret|code)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+        .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [redacted]');
+    }
+    document.getElementById('go').addEventListener('click', async function () {
+      var secret = document.getElementById('client_secret').value;
+      var status = document.getElementById('status');
+      if (!secret) { status.textContent = 'missing_secret'; return; }
+      status.textContent = 'starting';
+      try {
+        var tokenRes = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: '96ad86d4-4afe-4af0-b233-80c355e3142f',
+            client_secret: secret,
+            scope: 'openid offline_access vehicle_device_data vehicle_cmds',
+            audience: 'https://fleet-api.prd.eu.vn.cloud.tesla.com'
+          })
+        });
+        var tokenText = await tokenRes.text();
+        var tokenJson = {};
+        try { tokenJson = JSON.parse(tokenText); } catch (e) {}
+        if (!tokenRes.ok || !tokenJson.access_token) {
+          status.textContent = [
+            'token_http_status: ' + tokenRes.status,
+            'token_saved: no',
+            'Tesla error: ' + redact(tokenText).slice(0, 300)
+          ].join('\n');
+          return;
+        }
+        var blob = new Blob([JSON.stringify({
+          purpose: 'tesla_partner_token_eu',
+          access_token: tokenJson.access_token,
+          token_type: tokenJson.token_type || '',
+          expires_in: tokenJson.expires_in || '',
+          saved_at: Date.now()
+        })], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tesla-partner-token.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+        status.textContent = [
+          'token_http_status: ' + tokenRes.status,
+          'token_saved: yes',
+          'Region: eu',
+          'Domain: jeanette4231.github.io'
+        ].join('\n');
+      } catch (e) {
+        status.textContent = 'token_http_status: error\nTesla error: ' + redact(e && e.message ? e.message : String(e));
+      }
+    });
+  })();
+  </script>
+</body>
+</html>
