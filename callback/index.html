@@ -1,34 +1,113 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tesla authorization callback</title>
-</head>
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Tesla authorization callback</title></head>
 <body>
   <h1>Tesla authorization</h1>
-  <p id="message" role="status" aria-live="polite"></p>
+  <p id="message">Checking for an authorization result.</p>
+  <div id="complete_box" hidden>
+    <label for="client_secret">Tesla client secret</label><br>
+    <input id="client_secret" name="client_secret" type="password" autocomplete="off">
+    <p><button type="button" id="complete_btn">Complete authorization</button></p>
+  </div>
+  <pre id="status"></pre>
   <script>
-    (() => {
-      const query = new URLSearchParams(window.location.search);
-      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      const code = query.has("code") ? query.get("code") : hash.get("code");
-      const state = query.has("state") ? query.get("state") : hash.get("state");
-      const hasCode = typeof code === "string" && code.length > 0;
-
-      try {
-        if (hasCode) sessionStorage.setItem("tesla_oauth_code", code);
-        else sessionStorage.removeItem("tesla_oauth_code");
-        if (state !== null) sessionStorage.setItem("tesla_oauth_state", state);
-        else sessionStorage.removeItem("tesla_oauth_state");
-      } catch (_) {
-        // Keep the values only in this function's memory if storage is unavailable.
+  (function () {
+    function redact(text) {
+      return String(text || '')
+        .replace(/"(access_token|refresh_token|id_token|client_secret|code)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+        .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [redacted]');
+    }
+    function paramsFrom(str) {
+      var out = {};
+      var q = String(str || '').replace(/^[?#]/, '');
+      if (!q) return out;
+      q.split('&').forEach(function (part) {
+        if (!part) return;
+        var i = part.indexOf('=');
+        var k = decodeURIComponent(i >= 0 ? part.slice(0, i) : part);
+        var v = decodeURIComponent(i >= 0 ? part.slice(i + 1) : '');
+        out[k] = v;
+      });
+      return out;
+    }
+    var query = paramsFrom(location.search);
+    var hash = paramsFrom(location.hash);
+    var code = query.code || hash.code || sessionStorage.getItem('tesla_oauth_code') || '';
+    var state = query.state || hash.state || sessionStorage.getItem('tesla_oauth_state') || '';
+    if (code) sessionStorage.setItem('tesla_oauth_code', code);
+    if (state) sessionStorage.setItem('tesla_oauth_state', state);
+    var message = document.getElementById('message');
+    var completeBox = document.getElementById('complete_box');
+    var status = document.getElementById('status');
+    if (!code) {
+      message.textContent = 'No authorization code was found in this page address.';
+      return;
+    }
+    message.textContent = 'Authorization received. Completing the connection does not display any codes.';
+    completeBox.hidden = false;
+    document.getElementById('complete_btn').addEventListener('click', async function () {
+      var secret = document.getElementById('client_secret').value;
+      if (!secret) {
+        status.textContent = 'missing_secret';
+        return;
       }
-
-      document.getElementById("message").textContent = hasCode
-        ? "Authorization received. You can close this page or hand the computer back."
-        : "No authorization code was found in this page address.";
-    })();
+      status.textContent = 'starting';
+      try {
+        var tokenRes = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: '96ad86d4-4afe-4af0-b233-80c355e3142f',
+            client_secret: secret,
+            code: sessionStorage.getItem('tesla_oauth_code') || '',
+            audience: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
+            redirect_uri: 'https://jeanette4231.github.io/callback'
+          })
+        });
+        var tokenText = await tokenRes.text();
+        var tokenJson = {};
+        try { tokenJson = JSON.parse(tokenText); } catch (e) {}
+        if (!tokenRes.ok || !tokenJson.access_token) {
+          status.textContent = [
+            'token_http_status: ' + tokenRes.status,
+            'tokens_saved: no',
+            'Tesla error: ' + redact(tokenText).slice(0, 300)
+          ].join('\n');
+          return;
+        }
+        var blob = new Blob([JSON.stringify({
+          purpose: 'tesla_user_oauth',
+          access_token: tokenJson.access_token,
+          refresh_token: tokenJson.refresh_token || '',
+          token_type: tokenJson.token_type || '',
+          expires_in: tokenJson.expires_in || '',
+          saved_at: Date.now()
+        })], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tesla-user-tokens.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+        sessionStorage.removeItem('tesla_oauth_code');
+        status.textContent = [
+          'token_http_status: ' + tokenRes.status,
+          'tokens_saved: yes',
+          'has_refresh_token: ' + (tokenJson.refresh_token ? 'yes' : 'no'),
+          'Domain: jeanette4231.github.io'
+        ].join('\n');
+        message.textContent = 'Authorization tokens saved. You can hand the computer back.';
+      } catch (e) {
+        status.textContent = [
+          'token_http_status: error',
+          'tokens_saved: no',
+          'Tesla error: ' + redact(e && e.message ? e.message : String(e))
+        ].join('\n');
+      }
+    });
+  })();
   </script>
 </body>
 </html>
