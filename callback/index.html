@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tesla authorization callback</title>
+</head>
+<body>
+  <h1>Tesla authorization</h1>
+  <p id="message" role="status" aria-live="polite"></p>
+  <script>
+    (() => {
+      const query = new URLSearchParams(window.location.search);
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const code = query.has("code") ? query.get("code") : hash.get("code");
+      const state = query.has("state") ? query.get("state") : hash.get("state");
+      const hasCode = typeof code === "string" && code.length > 0;
+
+      try {
+        if (hasCode) sessionStorage.setItem("tesla_oauth_code", code);
+        else sessionStorage.removeItem("tesla_oauth_code");
+        if (state !== null) sessionStorage.setItem("tesla_oauth_state", state);
+        else sessionStorage.removeItem("tesla_oauth_state");
+      } catch (_) {
+        // Keep the values only in this function's memory if storage is unavailable.
+      }
+
+      document.getElementById("message").textContent = hasCode
+        ? "Authorization received. You can close this page or hand the computer back."
+        : "No authorization code was found in this page address.";
+    })();
+  </script>
+</body>
+</html>
