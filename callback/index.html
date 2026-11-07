@@ -2,16 +2,23 @@
 <html>
 <head><meta charset="utf-8"><title>Tesla authorization callback</title></head>
 <body>
+<!-- v4-auto-complete -->
   <h1>Tesla authorization</h1>
   <p id="message">Checking for an authorization result.</p>
-  <div id="complete_box" hidden>
+  <div id="secret_box" hidden>
     <label for="client_secret">Tesla client secret</label><br>
     <input id="client_secret" name="client_secret" type="password" autocomplete="off">
-    <p><button type="button" id="complete_btn">Complete authorization</button></p>
+    <p><button type="button" id="action_btn">Save secret for this connection</button></p>
   </div>
   <pre id="status"></pre>
   <script>
   (function () {
+    var SECRET_KEY = 'tesla_session_client_secret';
+    var CLIENT_ID = '96ad86d4-4afe-4af0-b233-80c355e3142f';
+    var REDIRECT_URI = 'https://jeanette4231.github.io/callback';
+    var TOKEN_URL = 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token';
+    var AUDIENCE = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+
     function redact(text) {
       return String(text || '')
         .replace(/"(access_token|refresh_token|id_token|client_secret|code)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
@@ -24,57 +31,40 @@
       q.split('&').forEach(function (part) {
         if (!part) return;
         var i = part.indexOf('=');
-        var k = decodeURIComponent(i >= 0 ? part.slice(0, i) : part);
-        var v = decodeURIComponent(i >= 0 ? part.slice(i + 1) : '');
+        var k = decodeURIComponent(i >= 0 ? part.slice(0, i) : part.replace(/\+/g, ' '));
+        var v = decodeURIComponent(i >= 0 ? part.slice(i + 1).replace(/\+/g, ' ') : '');
         out[k] = v;
       });
       return out;
     }
-    var query = paramsFrom(location.search);
-    var hash = paramsFrom(location.hash);
-    var code = query.code || hash.code || sessionStorage.getItem('tesla_oauth_code') || '';
-    var state = query.state || hash.state || sessionStorage.getItem('tesla_oauth_state') || '';
-    if (code) sessionStorage.setItem('tesla_oauth_code', code);
-    if (state) sessionStorage.setItem('tesla_oauth_state', state);
-    var message = document.getElementById('message');
-    var completeBox = document.getElementById('complete_box');
-    var status = document.getElementById('status');
-    if (!code) {
-      message.textContent = 'No authorization code was found in this page address.';
-      return;
-    }
-    message.textContent = 'Authorization received. Completing the connection does not display any codes.';
-    completeBox.hidden = false;
-    document.getElementById('complete_btn').addEventListener('click', async function () {
-      var secret = document.getElementById('client_secret').value;
-      if (!secret) {
-        status.textContent = 'missing_secret';
-        return;
-      }
-      status.textContent = 'starting';
+    async function exchange(secret, code) {
+      statusEl.textContent = 'starting';
       try {
-        var tokenRes = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
+        var tokenRes = await fetch(TOKEN_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             grant_type: 'authorization_code',
-            client_id: '96ad86d4-4afe-4af0-b233-80c355e3142f',
+            client_id: CLIENT_ID,
             client_secret: secret,
-            code: sessionStorage.getItem('tesla_oauth_code') || '',
-            audience: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
-            redirect_uri: 'https://jeanette4231.github.io/callback'
+            code: code,
+            audience: AUDIENCE,
+            redirect_uri: REDIRECT_URI
           })
         });
         var tokenText = await tokenRes.text();
         var tokenJson = {};
         try { tokenJson = JSON.parse(tokenText); } catch (e) {}
         if (!tokenRes.ok || !tokenJson.access_token) {
-          status.textContent = [
+          statusEl.textContent = [
             'token_http_status: ' + tokenRes.status,
             'tokens_saved: no',
             'Tesla error: ' + redact(tokenText).slice(0, 300)
           ].join('\n');
-          return;
+          if (String(tokenText).indexOf('invalid_auth_code') !== -1) {
+            message.textContent = 'This approval expired or was already used. Hand the computer back so a new one can be started.';
+          }
+          return false;
         }
         var blob = new Blob([JSON.stringify({
           purpose: 'tesla_user_oauth',
@@ -92,20 +82,78 @@
         a.remove();
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
         sessionStorage.removeItem('tesla_oauth_code');
-        status.textContent = [
+        sessionStorage.removeItem(SECRET_KEY);
+        statusEl.textContent = [
           'token_http_status: ' + tokenRes.status,
           'tokens_saved: yes',
           'has_refresh_token: ' + (tokenJson.refresh_token ? 'yes' : 'no'),
           'Domain: jeanette4231.github.io'
         ].join('\n');
-        message.textContent = 'Authorization tokens saved. You can hand the computer back.';
+        message.textContent = 'Authorization finished. You can hand the computer back.';
+        return true;
       } catch (e) {
-        status.textContent = [
+        statusEl.textContent = [
           'token_http_status: error',
           'tokens_saved: no',
           'Tesla error: ' + redact(e && e.message ? e.message : String(e))
         ].join('\n');
+        return false;
       }
+    }
+
+    var query = paramsFrom(location.search);
+    var hash = paramsFrom(location.hash);
+    var code = query.code || hash.code || '';
+    if (code) sessionStorage.setItem('tesla_oauth_code', code);
+    else sessionStorage.removeItem('tesla_oauth_code');
+
+    var message = document.getElementById('message');
+    var secretBox = document.getElementById('secret_box');
+    var statusEl = document.getElementById('status');
+    var actionBtn = document.getElementById('action_btn');
+    var secretInput = document.getElementById('client_secret');
+    var savedSecret = sessionStorage.getItem(SECRET_KEY) || '';
+
+    if (code && savedSecret) {
+      message.textContent = 'Authorization received. Completing the connection automatically.';
+      exchange(savedSecret, code);
+      return;
+    }
+
+    if (code) {
+      message.textContent = 'Authorization received. Completing the connection does not display any codes.';
+      actionBtn.textContent = 'Complete authorization';
+      secretBox.hidden = false;
+      actionBtn.addEventListener('click', function () {
+        var secret = secretInput.value;
+        if (!secret) {
+          statusEl.textContent = 'missing_secret';
+          return;
+        }
+        sessionStorage.setItem(SECRET_KEY, secret);
+        exchange(secret, code);
+      });
+      return;
+    }
+
+    if (savedSecret) {
+      message.textContent = 'Secret saved for this session. After you allow Tesla access, this page will finish on its own.';
+      return;
+    }
+
+    message.textContent = 'Save the Tesla client secret here first so the next approval can finish automatically.';
+    secretBox.hidden = false;
+    actionBtn.addEventListener('click', function () {
+      var secret = secretInput.value;
+      if (!secret) {
+        statusEl.textContent = 'missing_secret';
+        return;
+      }
+      sessionStorage.setItem(SECRET_KEY, secret);
+      secretInput.value = '';
+      secretBox.hidden = true;
+      statusEl.textContent = 'secret_saved';
+      message.textContent = 'Secret saved for this session. After you allow Tesla access, this page will finish on its own.';
     });
   })();
   </script>
